@@ -17,6 +17,7 @@
 #include "board.h"
 #include "action.h"
 #include <fstream>
+#include <time.h>
 
 class agent {
 public:
@@ -73,15 +74,32 @@ protected:
 class player : public random_agent {
 public:
 	struct node{
-		int value;
-		int expand_count = 0;
-		int vist_count = 1;
+		double value = 0;
 		std::vector<node*> child_node;
-		int nb = 0;
+		double nb = 0;
 		action::place move;
+		action::place op_move;
+		double rate = 0;
 	};
 	player(const std::string& args = "") : random_agent("name=random role=unknown " + args),
 		space(board::size_x * board::size_y), who(board::empty) {
+		if(args.find("N") != std::string::npos){
+			simulation_count = std::stoull(meta.at("N")); //simulation count
+			s_state = true;
+		}
+		else {
+			simulation_count = 0;
+			s_state = false;
+		}
+		if(args.find("T") != std::string::npos){
+			time_threshold = std::stoull(meta.at("T")); //thinking time
+			simulation_count = 1;
+			t_state = true;
+		}
+		else {
+			time_threshold = 1000000;
+			t_state = false;
+		}
 		if (name().find_first_of("[]():; ") != std::string::npos)
 			throw std::invalid_argument("invalid name: " + name());
 		if (role() == "black") who = board::black;
@@ -91,169 +109,181 @@ public:
 		for (size_t i = 0; i < space.size(); i++)
 			space[i] = action::place(i, who);
 	}
-
+	bool check_win(board state, std::vector<action::place>& xx){
+		
+		for(const action::place& move: xx){	
+			if(move.apply(state) == board::legal)return true;
+		}
+		return false;
+	}
+	action::place valid_move(board state, std::vector<action::place> xx){
+		// std::shuffle(xx.begin(), xx.end(), engine);
+		for(const action::place& move: xx){
+			if(move.apply(state) == board::legal){
+				return move;
+			}
+		}
+		return action();
+	}
+	int simulation(board state, std::vector<action::place> aa, std::vector<action::place> op_aa){
+		while(true){ // random board
+			
+			if(check_win(state, op_aa)){
+				action::place move = valid_move(state, op_aa);
+				move.apply(state);
+			}
+			else return 1;
+			if(check_win(state, aa)){
+				action::place move = valid_move(state, aa);
+				move.apply(state);
+			}
+			else return 0;
+			
+		}
+	}
 	virtual action take_action(const board& state) {
 		// selection process
-		if (simulation_count == 100){
+		std::shuffle(space.begin(), space.end(), engine);
+		if(simulation_count == 0){
+			for(action::place& move:space){
+				board after = state;
+				if(move.apply(after) == board::legal)
+					return move;
+			}
+			return action();
+		}
+		else{
+			board::piece_type op = who==board::black? board::white:board::black;
+			for (size_t i = 0; i < space.size(); i++)
+				op_space.push_back(action::place(i, op));
+			
 			b_root = new node;
-			w_root = new node;
 			b_root->value = 0;
 			b_root->nb = 0;
-			w_root->value = 0;
-			w_root->nb = 0;
-			current = who==1?b_root:w_root;
-			simulation_flag = true;
-		}
-		if(simulation_flag){ //simulation process
+
+			std::shuffle(op_space.begin(), op_space.end(), engine);
+
 			for(const action::place& move : space){
 				board after = state;
 				if(move.apply(after) == board::legal){
-					current->expand_count++;
+					node* tmp = new node;
+					tmp->move = move;
+					tmp->nb = 0;
+					b_root->child_node.push_back(tmp);
 				}
 			}
-			std::shuffle(space.begin(), space.end(), engine);
-			
-			action::place first_move;
-			for (const action::place& move : space) {
-				board after = state;
-				if (move.apply(after) == board::legal){
-					if(first){
-						first_move = move;
-						first = false;
-					}
-					return move;
-				}
-			}
-			//first result occur
-			/*
-			if(who==1){ //I'm black 
-				node* b = new node;
-				b->move = first_move;
-				b->nb = 0;
-				b->value = 0; //lose
-				// b_root->value = b->value;
-				b_root->child_node.push_back(b);
-				node* w = new node;
-				w->move = first_move;
-				w->nb = 0;
-				w->value = 1; //win
-				// w_root->value = w->value;
-				w_root->child_node.push_back(w);
-				playOneSequence(b_root);
-				playOneSequence(w_root);
-			}else{ // I'm white
-				node* b = new node;
-				b->move = first_move;
-				b->nb = 0;
-				b->value = 1; //lose
-				// b_root->value = b->value;
-				b_root->child_node.push_back(b);
-				node* w = new node;
-				w->move = first_move;
-				w->nb = 0;
-				w->value = 0; //win
-				// w_root->value = w->value;
-				w_root->child_node.push_back(w);
-				playOneSequence(b_root);
-				playOneSequence(w_root);
-			}*/
-			node *tmp = new node;
-			tmp->nb = 0;
-			tmp->value = 0;
-			tmp->move = first_move;
-			current->child_node.push_back(tmp);
-			 
-			playOneSequence(current); 
-			simulation_flag = false;
-			current = who==1?b_root:w_root;
-			simulation_count--;
+			if(b_root->child_node.size() == 1){
+				return b_root->child_node.front()->move;
+			}else if(b_root->child_node.size() == 0)
+				return action();
 		}
-		else{ // tree policy
-			if(current->expand_count){ // still have the legal move can expand
-				action::place new_move;
-				for(const action::place& move: space){
-					board after = state;
+		double START, END;
+		START = clock();
+		END = clock();
+		int cycle = simulation_count;
+		
+		while(true){
+			if(s_state){
+				if(cycle == 0)break;
+				else cycle--;
+			}
+			if(t_state){
+				if(END - START >= time_threshold -10){
+					break;
+				} 
+				else END = clock();
+			}
+			board current_state = state;
+			if(check_win(current_state, space) == false)	break;
+			std::vector<node*> t;
+			t.push_back(b_root);
+			
+			while(t.back()->child_node.size()){
+				node* tmp = descendByUCB1(t.back());
+				t.push_back(tmp);
+			}
+			if(t.back()->nb != 0 && check_win(current_state, space)){
+				for(const action::place& move : space){
+					board after = current_state;
 					if(move.apply(after) == board::legal){
-						for(size_t i = 0; i < current->child_node.size(); i++){
-							if(current->child_node[i]->move != move){
-								node* tmp = new node;
-								tmp->nb = 0;
-								tmp->move = new_move;
-								current->child_node.push_back(tmp);
-								new_move = move;
-								current->expand_count--;
-								break;
-							}
-						}
+						node* child = new node;
+						child->move = move;
+						child->nb = 0;
+						t.back()->child_node.push_back(child);
 						break;
 					}
 				}
-				first = true;
-				simulation_flag = true;
-				return new_move;
-			}else{
-				std::vector<node*> t;
-				t.push_back(current);
-				int i = 0;
-				while(t[i]->child_node.size()){
-					t.push_back(descendByUCB1(t[i]));
-					i = i + 1;
-					current = t[i];
-					board after = state;
-					if(current->move.apply(after) == board::legal){
-						return current->move;
+				t.push_back(descendByUCB1(t.back()));
+			}
+
+			for(size_t i=1;i<t.size(); i++){
+				
+				if(check_win(current_state, space) == false)
+				break;
+				t[i]->move.apply(current_state);
+				if(i==t.size()-1) break;
+
+				if(check_win(current_state, op_space) == false)
+				break;
+				if(t[i]->nb == 0){
+					for(action::place& move : op_space){
+						board after = current_state;
+						if(move.apply(after) == board::legal){
+							move.apply(current_state);
+							t[i]->op_move = move;
+							break;
+						}
 					}
+				}else{
+					t[i]->op_move.apply(current_state);
 				}
-				current = t[i];
-				first = true;
-				simulation_flag = true;
-				return current->move;
+			}
+			int tmp;
+			if(check_win(current_state, op_space) == false)
+				tmp = 1;
+			else
+				tmp = simulation(current_state, space, op_space);
+			updateValue(t, tmp);
+			END = clock();
+		}
+		int index = 0; double max = 0;
+		for(size_t i=0;i<b_root->child_node.size();i++){
+			if(b_root->child_node[i]->nb >= max){
+				max = b_root->child_node[i]->nb;
+				index = i;
 			}
 		}
-		
-		return action();
+		return b_root->child_node[index]->move;
 	}
 	
-	void playOneSequence(node* root) { //simulation
-		std::vector<node*> t; t.push_back(root);
-		int i = 0;
-		while(t[i] -> child_node.size()){
-			t.push_back(descendByUCB1(t[i]));
-			i = i + 1;
-		}
-		updateValue(t, -t[i]->value);
-		
-	}
-	node* descendByUCB1(node* tmp){ // selection
-		int nb = 0;
-		for(size_t i=0; i < tmp->child_node.size(); i++){
-			nb += tmp->child_node[i]->nb;
-		}
-		std::vector<int> v;
-		v.reserve(tmp->child_node.size());
-		for(size_t i=0;i < tmp->child_node.size(); i++){
-			
-			if( tmp->child_node[i]->nb == 0){
-				v[i] = 100000; //infinity
-			}
-			else{
-				v[i] = -tmp->child_node[i]->value / tmp->child_node[i]->nb +sqrt(2*log(nb) / tmp->child_node[i]->nb );
+	node* descendByUCB1(node* root){ // selection
+		double nb = 0;
+		for(size_t i = 0;i<root->child_node.size(); i++)
+			nb += root->child_node[i]->nb;
+
+		std::vector<double> v;
+		for(size_t i=0; i<root->child_node.size();i++ ){
+			if(root->child_node[i]->nb == 0){
+				v.push_back(10000.0);
+			}else{
+				double result = root->child_node[i]->value / root->child_node[i]->nb + sqrt(2.4*log(nb)/root->child_node[i]->nb);
+				v.push_back(result);
 			}
 		}
-		int index = 0, max = 0;
-		for(size_t j=0;j < tmp->child_node.size(); j++){
-			if(max > v[j]){
+		int max = 0;
+		int index = 0;
+		for(size_t j=0; j < v.size();j++){
+			if(v[j] >= max){
 				max = v[j];
 				index = j;
 			}
 		}
-		return tmp->child_node[index];
+		return root->child_node[index];
 	}
 	void updateValue(std::vector<node*> mcts_tree, int value){ //back propagation
-		for(int i=mcts_tree.size()-2; i>=0;i--){
-			mcts_tree[i]->value = mcts_tree[i]->value + value; //may wrong
+		for(int i=mcts_tree.size()-1; i>=0;i--){
+			mcts_tree[i]->value = mcts_tree[i]->value + value;
 			mcts_tree[i]->nb = mcts_tree[i]->nb + 1;
-			value = -value;
 		}
 	}
 
@@ -261,14 +291,10 @@ private:
 	
 	std::vector<action::place> space;
 	board::piece_type who;
-
-	std::vector<action::place> legal;
-	int simulation_count = 100;
-	// std::vector<node*> black_mcts_tree;
-	// std::vector<node*> white_mcts_tree;
-	bool simulation_flag = true;
-	bool first = true;
-	node* current;
+	size_t simulation_count = 0;
+	int time_threshold = 0;
+	std::vector<action::place> op_space;
 	node* b_root;
-	node* w_root;
+	bool s_state = false;
+	bool t_state = false;
 };
